@@ -30,9 +30,7 @@ final class PeekabooMobileUITests: XCTestCase {
         // Newest first: Beta sits above Alpha.
         XCTAssertLessThan(second.frame.minY, first.frame.minY)
 
-        let secondDragHandle = app.images["Drag Beta"]
-        XCTAssertTrue(secondDragHandle.waitForExistence(timeout: 3))
-        secondDragHandle.press(forDuration: 1.0, thenDragTo: first)
+        second.press(forDuration: 1.0, thenDragTo: first)
 
         let deadline = Date().addingTimeInterval(3)
         while second.frame.minY <= first.frame.minY, Date() < deadline {
@@ -44,11 +42,11 @@ final class PeekabooMobileUITests: XCTestCase {
     func testDragMovesTaskAcrossSections() throws {
         addTask(named: "Move me")
 
-        let dragHandle = app.images["Drag Move me"]
+        let draggedTask = app.staticTexts["Move me"]
         let destination = app.staticTexts["task-section-inProgress"]
-        XCTAssertTrue(dragHandle.waitForExistence(timeout: 3))
+        XCTAssertTrue(draggedTask.waitForExistence(timeout: 3))
         XCTAssertTrue(destination.waitForExistence(timeout: 3))
-        dragHandle.press(
+        draggedTask.press(
             forDuration: 1.2,
             thenDragTo: destination,
             withVelocity: .slow,

@@ -1,15 +1,12 @@
 // Compact iPhone task row with the same internal actions as the macOS panel.
-// Touch mapping: double-tap = double-click. Drag/reorder is owned by
-// MobileTaskListScreen; a row context menu would steal its long press.
+// Touch mapping: double-tap = double-click. Drag/drop is attached to the whole
+// row by MobileTaskListScreen; a context menu would steal its long press.
 import SwiftUI
 import UIKit
 
 struct MobileTaskRow: View {
     @ObservedObject var store: TaskStore
     let task: TaskItem
-    let isDragging: Bool
-    let dragChanged: (CGPoint) -> Void
-    let dragEnded: (CGPoint) -> Void
     let edit: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -37,7 +34,7 @@ struct MobileTaskRow: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
-                .gesture(
+                .simultaneousGesture(
                     TapGesture(count: 2)
                         .exclusively(before: TapGesture())
                         .onEnded { gesture in
@@ -50,24 +47,9 @@ struct MobileTaskRow: View {
                         }
                 )
 
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.tertiary)
-                .frame(width: 30, height: 30)
-                .contentShape(Rectangle())
-                .scaleEffect(isDragging ? 1.15 : 1)
-                .highPriorityGesture(
-                    DragGesture(
-                        minimumDistance: 4,
-                        coordinateSpace: .global
-                    )
-                    .onChanged { dragChanged($0.location) }
-                    .onEnded { dragEnded($0.location) }
-                )
-                .accessibilityLabel("Drag \(task.title)")
-                .accessibilityIdentifier("drag-task-\(task.id.uuidString)")
         }
         .padding(.vertical, 2)
+        .contentShape(Rectangle())
         .animation(reduceMotion ? nil : PeekabooMotion.quick, value: task.priorityRaw)
         .animation(reduceMotion ? nil : PeekabooMotion.quick, value: task.statusRaw)
         // Gentle pulse on the status mark when the task enters In Progress.

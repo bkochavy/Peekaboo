@@ -1,20 +1,16 @@
 import SwiftUI
 
-private enum MobileTaskDropTarget: Hashable {
-    case status(TaskStatus)
-    case task(UUID)
-}
+private enum MobileTaskListItem: Identifiable {
+    case header(status: TaskStatus, count: Int)
+    case task(TaskItem)
+    case empty(status: TaskStatus)
 
-private struct MobileTaskDropTargetPreferenceKey: PreferenceKey {
-    static var defaultValue: [MobileTaskDropTarget: CGRect] = [:]
-
-    static func reduce(
-        value: inout [MobileTaskDropTarget: CGRect],
-        nextValue: () -> [MobileTaskDropTarget: CGRect]
-    ) {
-        value.merge(nextValue(), uniquingKeysWith: { current, newValue in
-            current.union(newValue)
-        })
+    var id: String {
+        switch self {
+        case let .header(status, _): "header-\(status.rawValue)"
+        case let .task(task): "task-\(task.id.uuidString)"
+        case let .empty(status): "empty-\(status.rawValue)"
+        }
     }
 }
 
@@ -25,8 +21,6 @@ struct MobileTaskListScreen: View {
 
     @State private var selectedScope: TaskScope = .tasks
     @State private var editor: MobileTaskEditorConfiguration?
-    @State private var draggingTaskID: UUID?
-    @State private var dropTargetFrames: [MobileTaskDropTarget: CGRect] = [:]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -113,38 +107,31 @@ struct MobileTaskListScreen: View {
     // MARK: Task list
 
     private func taskList(snapshot: TaskScopeSnapshot) -> some View {
-        List {
+        let items = listItems(for: snapshot)
+
+        return List {
             if snapshot.visibleCount == 0 {
                 emptyState
             } else {
-                ForEach(displayedSections(for: snapshot)) { section in
-                    Section {
-                        if section.tasks.isEmpty {
-                            emptySectionDropTarget(status: section.status)
-                        } else {
-                            ForEach(section.tasks) { task in
-                                MobileTaskRow(
-                                    store: store,
-                                    task: task,
-                                    isDragging: draggingTaskID == task.id,
-                                    dragChanged: { _ in
-                                        draggingTaskID = task.id
-                                    },
-                                    dragEnded: { location in
-                                        finishDrag(taskID: task.id, at: location)
-                                    },
-                                    edit: { editor = .edit(task) }
-                                )
-                                .background(dropTargetFrame(for: .task(task.id)))
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(Color.clear)
-                                .listRowInsets(EdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 12))
-                            }
-                        }
-                    } header: {
-                        sectionHeader(section)
+                ForEach(items) { item in
+                    switch item {
+                    case let .header(status, count):
+                        sectionHeader(status: status, count: count)
+                    case let .task(task):
+                        MobileTaskRow(
+                            store: store,
+                            task: task,
+                            edit: { editor = .edit(task) }
+                        )
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 12))
+                    case let .empty(status):
+                        emptySectionDropTarget(status: status)
                     }
-                    .listSectionSeparator(.hidden)
+                }
+                .onMove { source, destination in
+                    move(items: items, from: source, to: destination)
                 }
             }
         }
@@ -152,9 +139,6 @@ struct MobileTaskListScreen: View {
         .scrollIndicators(.never)
         .refreshable { await refresh() }
         .safeAreaInset(edge: .bottom) { addTaskButton }
-        .onPreferenceChange(MobileTaskDropTargetPreferenceKey.self) {
-            dropTargetFrames = $0
-        }
     }
 
     private func displayedSections(for snapshot: TaskScopeSnapshot) -> [TaskSectionSnapshot] {
@@ -166,57 +150,70 @@ struct MobileTaskListScreen: View {
         }
     }
 
-    private func sectionHeader(_ section: TaskSectionSnapshot) -> some View {
-        Text("\(section.status.title) · \(section.tasks.count)")
+    private func listItems(for snapshot: TaskScopeSnapshot) -> [MobileTaskListItem] {
+        displayedSections(for: snapshot).flatMap { section in
+            var items: [MobileTaskListItem] = [
+                .header(status: section.status, count: section.tasks.count)
+            ]
+            if section.tasks.isEmpty {
+                items.append(.empty(status: section.status))
+            } else {
+                items.append(contentsOf: section.tasks.map(MobileTaskListItem.task))
+            }
+            return items
+        }
+    }
+
+    private func sectionHeader(status: TaskStatus, count: Int) -> some View {
+        Text("\(status.title) · \(count)")
             .font(.caption)
             .foregroundStyle(.secondary)
             .textCase(nil)
             .contentTransition(.numericText())
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .background(dropTargetFrame(for: .status(section.status)))
-            .accessibilityIdentifier("task-section-\(section.status.rawValue)")
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 2, trailing: 20))
+            .accessibilityIdentifier("task-section-\(status.rawValue)")
     }
 
     private func emptySectionDropTarget(status: TaskStatus) -> some View {
         Color.clear
             .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
             .contentShape(Rectangle())
-            .background(dropTargetFrame(for: .status(status)))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 5, trailing: 12))
             .accessibilityElement()
             .accessibilityLabel("Move to \(status.title)")
             .accessibilityIdentifier("empty-drop-target-\(status.rawValue)")
     }
 
-    private func dropTargetFrame(for target: MobileTaskDropTarget) -> some View {
-        GeometryReader { proxy in
-            Color.clear.preference(
-                key: MobileTaskDropTargetPreferenceKey.self,
-                value: [target: proxy.frame(in: .global)]
-            )
-        }
-    }
+    /// Uses the List's native reorder gesture across the complete visual list.
+    /// A task dropped on a header/empty row adopts that row's status; dropping
+    /// on another task reorders or adopts the target task's status.
+    private func move(
+        items: [MobileTaskListItem],
+        from source: IndexSet,
+        to destination: Int
+    ) {
+        guard let sourceIndex = source.first,
+              source.count == 1,
+              items.indices.contains(sourceIndex),
+              case let .task(movedTask) = items[sourceIndex],
+              sourceIndex != destination,
+              sourceIndex + 1 != destination else { return }
 
-    private func finishDrag(taskID: UUID, at location: CGPoint) {
-        defer { draggingTaskID = nil }
+        let targetIndex = destination > sourceIndex ? destination - 1 : destination
+        guard items.indices.contains(targetIndex), targetIndex != sourceIndex else { return }
 
-        let matchingTargets = dropTargetFrames.filter { target, frame in
-            target != .task(taskID)
-                && frame.insetBy(dx: -8, dy: -12).contains(location)
-        }
-        let closestTarget = matchingTargets.min { lhs, rhs in
-            abs(lhs.value.midY - location.y) < abs(rhs.value.midY - location.y)
-        }?.key
         withAnimation(reduceMotion ? nil : PeekabooMotion.spring) {
-            switch closestTarget {
-            case let .task(targetID):
-                _ = store.drop(taskID: taskID, onto: targetID)
-            case let .status(status):
-                _ = store.drop(taskID: taskID, into: status)
-            case nil:
-                break
+            switch items[targetIndex] {
+            case let .task(targetTask):
+                _ = store.drop(taskID: movedTask.id, onto: targetTask.id)
+            case let .header(status, _), let .empty(status):
+                _ = store.drop(taskID: movedTask.id, into: status)
             }
         }
     }
