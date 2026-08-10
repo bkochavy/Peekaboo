@@ -154,7 +154,15 @@ struct PeekPanelView: View {
     private func taskList(sections: [TaskSectionSnapshot]) -> some View {
         ScrollView {
             LazyVStack(spacing: 7) {
-                ForEach(displaySections(from: sections)) { section in
+                if uiState.isDraggingTask, uiState.selectedScope == .tasks {
+                    TaskEdgeDropZone(
+                        store: store,
+                        uiState: uiState,
+                        status: .inProgress
+                    )
+                }
+
+                ForEach(sections) { section in
                     TaskSectionView(
                         store: store,
                         uiState: uiState,
@@ -162,21 +170,19 @@ struct PeekPanelView: View {
                         tasks: section.tasks
                     )
                 }
+
+                if uiState.isDraggingTask, uiState.selectedScope == .tasks {
+                    TaskEdgeDropZone(
+                        store: store,
+                        uiState: uiState,
+                        status: .done
+                    )
+                }
             }
             .padding(.horizontal, PeekabooStyle.horizontalPadding - 4)
             .padding(.bottom, 14)
         }
         .scrollIndicators(.never)
-    }
-
-    /// While a task is being dragged, surface every section of the scope —
-    /// including empty ones — so any status is reachable as a drop target.
-    private func displaySections(from sections: [TaskSectionSnapshot]) -> [TaskSectionSnapshot] {
-        guard uiState.isDraggingTask else { return sections }
-        return uiState.selectedScope.statuses.map { status in
-            sections.first { $0.status == status }
-                ?? TaskSectionSnapshot(status: status, tasks: [])
-        }
     }
 
     private var emptyState: some View {
@@ -199,5 +205,45 @@ struct PeekPanelView: View {
 
     private var newItemTitle: String {
         uiState.selectedScope.newItemTitle
+    }
+}
+
+private struct TaskEdgeDropZone: View {
+    @ObservedObject var store: TaskStore
+    @ObservedObject var uiState: PanelUIState
+    let status: TaskStatus
+
+    @State private var isTargeted = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Color.clear
+            .frame(maxWidth: .infinity, minHeight: 26)
+            .contentShape(Rectangle())
+            .overlay(alignment: indicatorAlignment) {
+                Capsule()
+                    .fill(Color.accentColor.opacity(isTargeted ? 0.65 : 0))
+                    .frame(height: 2)
+                    .padding(.horizontal, 8)
+            }
+            .onDrop(
+                of: [TaskDragPayload.internalTaskType],
+                isTargeted: $isTargeted,
+                perform: acceptDrop
+            )
+            .animation(reduceMotion ? nil : PeekabooMotion.quick, value: isTargeted)
+            .accessibilityLabel("Move to \(status.title)")
+            .accessibilityIdentifier("task-edge-\(status.rawValue)")
+    }
+
+    private var indicatorAlignment: Alignment {
+        status == .inProgress ? .bottom : .top
+    }
+
+    private func acceptDrop(_ providers: [NSItemProvider]) -> Bool {
+        TaskDragPayload.loadTaskID(from: providers) { taskID in
+            uiState.endDragging()
+            _ = store.drop(taskID: taskID, into: status)
+        }
     }
 }

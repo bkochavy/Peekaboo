@@ -43,9 +43,11 @@ final class PeekabooMobileUITests: XCTestCase {
         addTask(named: "Move me")
 
         let draggedTask = app.staticTexts["Move me"]
-        let destination = app.staticTexts["task-section-inProgress"]
+        let destination = app.otherElements["task-edge-inProgress"]
         XCTAssertTrue(draggedTask.waitForExistence(timeout: 3))
         XCTAssertTrue(destination.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts["task-section-inProgress"].exists)
+        XCTAssertFalse(app.staticTexts["task-section-done"].exists)
         draggedTask.press(
             forDuration: 1.2,
             thenDragTo: destination,
@@ -55,19 +57,27 @@ final class PeekabooMobileUITests: XCTestCase {
 
         let todoSection = app.staticTexts["task-section-todo"]
         let inProgressSection = app.staticTexts["task-section-inProgress"]
-        let todoIsEmpty = expectation(
-            for: NSPredicate(format: "label CONTAINS '0'"),
-            evaluatedWith: todoSection
-        )
         let inProgressHasTask = expectation(
             for: NSPredicate(format: "label CONTAINS '1'"),
             evaluatedWith: inProgressSection
         )
         XCTAssertEqual(
-            XCTWaiter.wait(for: [todoIsEmpty, inProgressHasTask], timeout: 4),
+            XCTWaiter.wait(for: [inProgressHasTask], timeout: 4),
             .completed
         )
+        XCTAssertTrue(todoSection.waitForNonExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Move me"].exists)
+
+        let doneDestination = app.otherElements["task-edge-done"]
+        XCTAssertTrue(doneDestination.waitForExistence(timeout: 3))
+        app.staticTexts["Move me"].press(
+            forDuration: 1.2,
+            thenDragTo: doneDestination,
+            withVelocity: .slow,
+            thenHoldForDuration: 0.6
+        )
+        XCTAssertTrue(app.staticTexts["task-section-done"].waitForExistence(timeout: 4))
+        XCTAssertTrue(inProgressSection.waitForNonExistence(timeout: 3))
 
         let proof = XCTAttachment(screenshot: app.screenshot())
         proof.name = "iPhone cross-section drag"

@@ -23,19 +23,15 @@ struct TaskSectionView: View {
             .frame(height: 24)
             .padding(.horizontal, 4)
 
-            if tasks.isEmpty {
-                dropPlaceholder
-            } else {
-                VStack(spacing: PeekabooStyle.taskSpacing) {
-                    ForEach(tasks) { task in
-                        TaskRowView(store: store, uiState: uiState, task: task)
-                            .transition(
-                                .asymmetric(
-                                    insertion: .move(edge: .top).combined(with: .opacity),
-                                    removal: .scale(scale: 0.96).combined(with: .opacity)
-                                )
+            VStack(spacing: PeekabooStyle.taskSpacing) {
+                ForEach(tasks) { task in
+                    TaskRowView(store: store, uiState: uiState, task: task)
+                        .transition(
+                            .asymmetric(
+                                insertion: .move(edge: .top).combined(with: .opacity),
+                                removal: .scale(scale: 0.96).combined(with: .opacity)
                             )
-                    }
+                        )
                 }
             }
         }
@@ -48,20 +44,6 @@ struct TaskSectionView: View {
         }
         .animation(reduceMotion ? nil : PeekabooMotion.quick, value: isDropTargeted)
         .animation(reduceMotion ? nil : PeekabooMotion.spring, value: tasks.map(\.id))
-    }
-
-    private var dropPlaceholder: some View {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-            .foregroundStyle(Color.secondary.opacity(isDropTargeted ? 0.6 : 0.3))
-            .frame(height: PeekabooStyle.rowHeight)
-            .overlay(
-                Text("Drop here")
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(.secondary)
-            )
-            .padding(.horizontal, 4)
-            .accessibilityIdentifier("task-section-drop-zone-\(status.rawValue)")
     }
 
     private func acceptSectionDrop(from providers: [NSItemProvider]) -> Bool {

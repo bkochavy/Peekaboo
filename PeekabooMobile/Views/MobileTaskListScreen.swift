@@ -1,15 +1,15 @@
 import SwiftUI
 
 private enum MobileTaskListItem: Identifiable {
+    case edge(TaskStatus)
     case header(status: TaskStatus, count: Int)
     case task(TaskItem)
-    case empty(status: TaskStatus)
 
     var id: String {
         switch self {
+        case let .edge(status): "edge-\(status.rawValue)"
         case let .header(status, _): "header-\(status.rawValue)"
         case let .task(task): "task-\(task.id.uuidString)"
-        case let .empty(status): "empty-\(status.rawValue)"
         }
     }
 }
@@ -49,11 +49,20 @@ struct MobileTaskListScreen: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Peekaboo")
                     .font(.system(size: 22, weight: .bold, design: .rounded))
-                Text(selectedScope.activeSubtitle(count: activeCount))
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(.tertiary)
-                    .contentTransition(.numericText())
-                    .animation(reduceMotion ? nil : PeekabooMotion.quick, value: activeCount)
+
+                HStack(spacing: 5) {
+                    Image(systemName: syncSymbol)
+                        .font(.system(size: 10, weight: .medium))
+                    Text(syncTitle)
+                    Text("·")
+                    Text(selectedScope.activeSubtitle(count: activeCount))
+                        .contentTransition(.numericText())
+                }
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .animation(reduceMotion ? nil : PeekabooMotion.quick, value: activeCount)
             }
 
             Spacer()
@@ -115,6 +124,8 @@ struct MobileTaskListScreen: View {
             } else {
                 ForEach(items) { item in
                     switch item {
+                    case let .edge(status):
+                        edgeDropTarget(status: status)
                     case let .header(status, count):
                         sectionHeader(status: status, count: count)
                     case let .task(task):
@@ -126,8 +137,6 @@ struct MobileTaskListScreen: View {
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 12))
-                    case let .empty(status):
-                        emptySectionDropTarget(status: status)
                     }
                 }
                 .onMove { source, destination in
@@ -136,32 +145,27 @@ struct MobileTaskListScreen: View {
             }
         }
         .listStyle(.plain)
+        .environment(\.defaultMinListRowHeight, 1)
         .scrollIndicators(.never)
         .refreshable { await refresh() }
-        .safeAreaInset(edge: .bottom) { addTaskButton }
-    }
-
-    private func displayedSections(for snapshot: TaskScopeSnapshot) -> [TaskSectionSnapshot] {
-        let sectionsByStatus = Dictionary(uniqueKeysWithValues: snapshot.sections.map {
-            ($0.status, $0)
-        })
-        return selectedScope.statuses.map { status in
-            sectionsByStatus[status] ?? TaskSectionSnapshot(status: status, tasks: [])
+        .contentMargins(.bottom, 76, for: .scrollContent)
+        .overlay(alignment: .bottom) {
+            addTaskButton
+                .padding(.bottom, 8)
         }
     }
 
     private func listItems(for snapshot: TaskScopeSnapshot) -> [MobileTaskListItem] {
-        displayedSections(for: snapshot).flatMap { section in
-            var items: [MobileTaskListItem] = [
+        var items = snapshot.sections.flatMap { section in
+            [
                 .header(status: section.status, count: section.tasks.count)
-            ]
-            if section.tasks.isEmpty {
-                items.append(.empty(status: section.status))
-            } else {
-                items.append(contentsOf: section.tasks.map(MobileTaskListItem.task))
-            }
-            return items
+            ] + section.tasks.map(MobileTaskListItem.task)
         }
+        guard selectedScope == .tasks else { return items }
+
+        items.insert(.edge(.inProgress), at: 0)
+        items.append(.edge(.done))
+        return items
     }
 
     private func sectionHeader(status: TaskStatus, count: Int) -> some View {
@@ -178,21 +182,18 @@ struct MobileTaskListScreen: View {
             .accessibilityIdentifier("task-section-\(status.rawValue)")
     }
 
-    private func emptySectionDropTarget(status: TaskStatus) -> some View {
+    private func edgeDropTarget(status: TaskStatus) -> some View {
         Color.clear
-            .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 6)
             .contentShape(Rectangle())
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 5, trailing: 12))
+            .listRowInsets(EdgeInsets())
             .accessibilityElement()
             .accessibilityLabel("Move to \(status.title)")
-            .accessibilityIdentifier("empty-drop-target-\(status.rawValue)")
+            .accessibilityIdentifier("task-edge-\(status.rawValue)")
     }
 
-    /// Uses the List's native reorder gesture across the complete visual list.
-    /// A task dropped on a header/empty row adopts that row's status; dropping
-    /// on another task reorders or adopts the target task's status.
     private func move(
         items: [MobileTaskListItem],
         from source: IndexSet,
@@ -201,8 +202,16 @@ struct MobileTaskListScreen: View {
         guard let sourceIndex = source.first,
               source.count == 1,
               items.indices.contains(sourceIndex),
-              case let .task(movedTask) = items[sourceIndex],
-              sourceIndex != destination,
+              case let .task(movedTask) = items[sourceIndex] else { return }
+
+        if let status = edgeStatus(in: items, destination: destination) {
+            withAnimation(reduceMotion ? nil : PeekabooMotion.spring) {
+                _ = store.drop(taskID: movedTask.id, into: status)
+            }
+            return
+        }
+
+        guard sourceIndex != destination,
               sourceIndex + 1 != destination else { return }
 
         let targetIndex = destination > sourceIndex ? destination - 1 : destination
@@ -210,12 +219,22 @@ struct MobileTaskListScreen: View {
 
         withAnimation(reduceMotion ? nil : PeekabooMotion.spring) {
             switch items[targetIndex] {
+            case let .edge(status), let .header(status, _):
+                _ = store.drop(taskID: movedTask.id, into: status)
             case let .task(targetTask):
                 _ = store.drop(taskID: movedTask.id, onto: targetTask.id)
-            case let .header(status, _), let .empty(status):
-                _ = store.drop(taskID: movedTask.id, into: status)
             }
         }
+    }
+
+    private func edgeStatus(
+        in items: [MobileTaskListItem],
+        destination: Int
+    ) -> TaskStatus? {
+        guard selectedScope == .tasks else { return nil }
+        if destination <= 1 { return .inProgress }
+        if destination >= items.count - 1 { return .done }
+        return nil
     }
 
     private var addTaskButton: some View {
@@ -231,7 +250,6 @@ struct MobileTaskListScreen: View {
                 .shadow(color: .black.opacity(0.18), radius: 12, y: 5)
         }
         .buttonStyle(.plain)
-        .padding(.vertical, 8)
         .accessibilityLabel(selectedScope.newItemTitle)
         .accessibilityIdentifier("add-task-button")
     }
@@ -254,34 +272,33 @@ struct MobileTaskListScreen: View {
 
     // MARK: Footer
 
+    @ViewBuilder
     private var footer: some View {
-        VStack(spacing: 4) {
-            if let message = store.lastErrorMessage {
-                Text(message)
-                    .font(.system(size: 11, design: .rounded))
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-            }
+        if store.lastErrorMessage != nil || cloudSyncErrorMessage != nil {
+            VStack(spacing: 4) {
+                if let message = store.lastErrorMessage {
+                    Text(message)
+                        .font(.system(size: 11, design: .rounded))
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                }
 
-            if case .available = iCloudAvailability,
-               let message = store.cloudSyncStatus.lastErrorMessage {
-                Text(message)
-                    .font(.system(size: 11, design: .rounded))
-                    .foregroundStyle(.orange)
-                    .lineLimit(2)
+                if let message = cloudSyncErrorMessage {
+                    Text(message)
+                        .font(.system(size: 11, design: .rounded))
+                        .foregroundStyle(.orange)
+                        .lineLimit(2)
+                }
             }
-
-            HStack(spacing: 5) {
-                Image(systemName: syncSymbol)
-                    .font(.system(size: 10, weight: .medium))
-                Text(syncTitle)
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-            }
-            .foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 8)
+    }
+
+    private var cloudSyncErrorMessage: String? {
+        guard case .available = iCloudAvailability else { return nil }
+        return store.cloudSyncStatus.lastErrorMessage
     }
 
     private var syncSymbol: String {
