@@ -5,14 +5,24 @@ struct PeekPanelView: View {
     @ObservedObject var uiState: PanelUIState
     @ObservedObject var settings: AppSettings
 
+    @State private var searchQuery = ""
+    @State private var isSearchPresented = false
+    @FocusState private var isSearchFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let snapshot = store.snapshot(for: uiState.selectedScope)
+        let sections = filteredSections(snapshot.sections)
+        let visibleCount = sections.reduce(0) { $0 + $1.tasks.count }
 
         VStack(spacing: 0) {
             header(activeCount: snapshot.activeCount)
             scopePicker
+
+            if isSearchPresented {
+                searchBar
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
 
             if uiState.isComposerPresented {
                 TaskComposerView(store: store, uiState: uiState)
@@ -21,11 +31,11 @@ struct PeekPanelView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            if snapshot.visibleCount == 0 {
-                emptyState
+            if visibleCount == 0 {
+                emptyState(isSearching: !normalizedSearchQuery.isEmpty)
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             } else {
-                taskList(sections: snapshot.sections)
+                taskList(sections: sections)
                     .transition(.opacity)
             }
 
@@ -44,6 +54,7 @@ struct PeekPanelView: View {
         .animation(reduceMotion ? nil : PeekabooMotion.spring, value: store.tasks.map(\.id))
         .animation(reduceMotion ? nil : PeekabooMotion.quick, value: uiState.selectedScope)
         .animation(reduceMotion ? nil : PeekabooMotion.quick, value: uiState.isDraggingTask)
+        .animation(reduceMotion ? nil : PeekabooMotion.quick, value: isSearchPresented)
     }
 
     private func header(activeCount: Int) -> some View {
@@ -57,6 +68,22 @@ struct PeekPanelView: View {
                 .animation(reduceMotion ? nil : PeekabooMotion.quick, value: activeCount)
 
             Spacer()
+
+            Button(action: toggleSearch) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 24, height: 24)
+                    .background(
+                        Color.primary.opacity(isSearchPresented ? 0.12 : 0.06),
+                        in: Circle()
+                    )
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help(isSearchPresented ? "Close search" : "Search tasks")
+            .accessibilityLabel(isSearchPresented ? "Close search" : "Search tasks")
+            .accessibilityAddTraits(isSearchPresented ? .isSelected : [])
+            .accessibilityIdentifier("toggle-task-search")
 
             Button {
                 AppCoordinator.shared.openSettings()
@@ -107,6 +134,67 @@ struct PeekPanelView: View {
         .padding(.bottom, 8)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("task-scope-picker")
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+
+            TextField("Search tasks", text: $searchQuery)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12, design: .rounded))
+                .focused($isSearchFocused)
+                .onExitCommand(perform: closeSearch)
+                .accessibilityLabel("Search tasks")
+                .accessibilityIdentifier("task-search-field")
+
+            if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                    isSearchFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear search")
+                .accessibilityLabel("Clear search")
+                .accessibilityIdentifier("clear-task-search")
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(
+            Color.primary.opacity(0.045),
+            in: Capsule(style: .continuous)
+        )
+        .overlay {
+            Capsule(style: .continuous)
+                .stroke(Color.primary.opacity(0.07), lineWidth: 0.6)
+        }
+        .padding(.horizontal, PeekabooStyle.horizontalPadding)
+        .padding(.bottom, 9)
+        .onAppear {
+            DispatchQueue.main.async { isSearchFocused = true }
+        }
+    }
+
+    private func toggleSearch() {
+        if isSearchPresented {
+            closeSearch()
+        } else {
+            isSearchPresented = true
+        }
+    }
+
+    private func closeSearch() {
+        isSearchFocused = false
+        searchQuery = ""
+        isSearchPresented = false
     }
 
     private func scopeCapsule(_ scope: TaskScope) -> some View {
@@ -185,18 +273,41 @@ struct PeekPanelView: View {
         .scrollIndicators(.never)
     }
 
-    private var emptyState: some View {
+    private func emptyState(isSearching: Bool) -> some View {
         VStack(spacing: 5) {
-            Text(uiState.selectedScope.emptyStateTitle)
+            Text(isSearching ? "No matches" : uiState.selectedScope.emptyStateTitle)
                 .font(.system(size: 13, weight: .medium, design: .rounded))
-            Text(uiState.selectedScope == .tasks
-                ? "Add a task and it will stay close by."
-                : "Capture an idea for later.")
+            Text(emptyStateMessage(isSearching: isSearching))
                 .font(.system(size: 11, design: .rounded))
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.bottom, 18)
+    }
+
+    private var normalizedSearchQuery: String {
+        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func filteredSections(_ sections: [TaskSectionSnapshot]) -> [TaskSectionSnapshot] {
+        guard !normalizedSearchQuery.isEmpty else { return sections }
+
+        return sections.compactMap { section in
+            let matchingTasks = section.tasks.filter {
+                $0.title.localizedStandardContains(normalizedSearchQuery)
+            }
+            guard !matchingTasks.isEmpty else { return nil }
+            return TaskSectionSnapshot(status: section.status, tasks: matchingTasks)
+        }
+    }
+
+    private func emptyStateMessage(isSearching: Bool) -> String {
+        if isSearching {
+            return "Try a different search."
+        }
+        return uiState.selectedScope == .tasks
+            ? "Add a task and it will stay close by."
+            : "Capture an idea for later."
     }
 
     private func activeSubtitle(count: Int) -> String {

@@ -21,22 +21,33 @@ struct MobileTaskListScreen: View {
 
     @State private var selectedScope: TaskScope = .tasks
     @State private var editor: MobileTaskEditorConfiguration?
+    @State private var searchQuery = ""
+    @State private var isSearchPresented = false
+    @FocusState private var isSearchFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let snapshot = store.snapshot(for: selectedScope)
+        let sections = filteredSections(snapshot.sections)
+        let visibleCount = sections.reduce(0) { $0 + $1.tasks.count }
 
         VStack(spacing: 0) {
             header(activeCount: snapshot.activeCount)
             scopePicker
 
-            taskList(snapshot: snapshot)
+            if isSearchPresented {
+                searchBar
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            taskList(sections: sections, visibleCount: visibleCount)
 
             footer
         }
         .background(Color(uiColor: .systemBackground))
         .animation(reduceMotion ? nil : PeekabooMotion.spring, value: store.tasks.map(\.id))
         .animation(reduceMotion ? nil : PeekabooMotion.quick, value: selectedScope)
+        .animation(reduceMotion ? nil : PeekabooMotion.quick, value: isSearchPresented)
         .sheet(item: $editor) { configuration in
             MobileTaskEditor(store: store, configuration: configuration)
         }
@@ -66,6 +77,21 @@ struct MobileTaskListScreen: View {
             }
 
             Spacer()
+
+            Button(action: toggleSearch) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 36, height: 36)
+                    .background(
+                        Color.primary.opacity(isSearchPresented ? 0.12 : 0.06),
+                        in: Circle()
+                    )
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isSearchPresented ? "Close search" : "Search tasks")
+            .accessibilityAddTraits(isSearchPresented ? .isSelected : [])
+            .accessibilityIdentifier("toggle-task-search")
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
@@ -85,6 +111,66 @@ struct MobileTaskListScreen: View {
         .padding(.bottom, 6)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("task-scope-picker")
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+
+            TextField("Search tasks", text: $searchQuery)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15, design: .rounded))
+                .focused($isSearchFocused)
+                .submitLabel(.search)
+                .accessibilityLabel("Search tasks")
+                .accessibilityIdentifier("task-search-field")
+
+            if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                    isSearchFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+                .accessibilityIdentifier("clear-task-search")
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 40)
+        .background(
+            Color.primary.opacity(0.05),
+            in: Capsule(style: .continuous)
+        )
+        .overlay {
+            Capsule(style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.75)
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 8)
+        .onAppear {
+            DispatchQueue.main.async { isSearchFocused = true }
+        }
+    }
+
+    private func toggleSearch() {
+        if isSearchPresented {
+            closeSearch()
+        } else {
+            isSearchPresented = true
+        }
+    }
+
+    private func closeSearch() {
+        isSearchFocused = false
+        searchQuery = ""
+        isSearchPresented = false
     }
 
     private func scopeCapsule(_ scope: TaskScope) -> some View {
@@ -115,12 +201,15 @@ struct MobileTaskListScreen: View {
 
     // MARK: Task list
 
-    private func taskList(snapshot: TaskScopeSnapshot) -> some View {
-        let items = listItems(for: snapshot)
+    private func taskList(
+        sections: [TaskSectionSnapshot],
+        visibleCount: Int
+    ) -> some View {
+        let items = listItems(for: sections)
 
         return List {
-            if snapshot.visibleCount == 0 {
-                emptyState
+            if visibleCount == 0 {
+                emptyState(isSearching: !normalizedSearchQuery.isEmpty)
             } else {
                 ForEach(items) { item in
                     switch item {
@@ -155,8 +244,8 @@ struct MobileTaskListScreen: View {
         }
     }
 
-    private func listItems(for snapshot: TaskScopeSnapshot) -> [MobileTaskListItem] {
-        var items = snapshot.sections.flatMap { section in
+    private func listItems(for sections: [TaskSectionSnapshot]) -> [MobileTaskListItem] {
+        var items = sections.flatMap { section in
             [
                 .header(status: section.status, count: section.tasks.count)
             ] + section.tasks.map(MobileTaskListItem.task)
@@ -254,13 +343,11 @@ struct MobileTaskListScreen: View {
         .accessibilityIdentifier("add-task-button")
     }
 
-    private var emptyState: some View {
+    private func emptyState(isSearching: Bool) -> some View {
         VStack(spacing: 5) {
-            Text(selectedScope.emptyStateTitle)
+            Text(isSearching ? "No matches" : selectedScope.emptyStateTitle)
                 .font(.system(size: 15, weight: .medium, design: .rounded))
-            Text(selectedScope == .tasks
-                ? "Add a task and it will appear on your Mac too."
-                : "Capture an idea and promote it when you're ready.")
+            Text(emptyStateMessage(isSearching: isSearching))
                 .font(.system(size: 13, design: .rounded))
                 .foregroundStyle(.secondary)
         }
@@ -268,6 +355,31 @@ struct MobileTaskListScreen: View {
         .padding(.vertical, 48)
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
+    }
+
+    private var normalizedSearchQuery: String {
+        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func filteredSections(_ sections: [TaskSectionSnapshot]) -> [TaskSectionSnapshot] {
+        guard !normalizedSearchQuery.isEmpty else { return sections }
+
+        return sections.compactMap { section in
+            let matchingTasks = section.tasks.filter {
+                $0.title.localizedStandardContains(normalizedSearchQuery)
+            }
+            guard !matchingTasks.isEmpty else { return nil }
+            return TaskSectionSnapshot(status: section.status, tasks: matchingTasks)
+        }
+    }
+
+    private func emptyStateMessage(isSearching: Bool) -> String {
+        if isSearching {
+            return "Try a different search."
+        }
+        return selectedScope == .tasks
+            ? "Add a task and it will appear on your Mac too."
+            : "Capture an idea and promote it when you're ready."
     }
 
     // MARK: Footer

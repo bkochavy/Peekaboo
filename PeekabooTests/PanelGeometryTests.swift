@@ -2,6 +2,12 @@ import XCTest
 @testable import Peekaboo
 
 final class PanelGeometryTests: XCTestCase {
+    func testPanelUsesLargeRoundedWidthAndThirtyPercentLargerHeight() {
+        XCTAssertEqual(PanelGeometry.panelWidth, 410, accuracy: 0.001)
+        XCTAssertEqual(PanelGeometry.minimumHeight, 494, accuracy: 0.001)
+        XCTAssertEqual(PanelGeometry.maximumHeight, 910, accuracy: 0.001)
+    }
+
     func testHotspotsOccupyExactScreenCorners() {
         let frame = CGRect(x: -1_440, y: 0, width: 1_440, height: 900)
         XCTAssertEqual(PanelGeometry.hotspot(in: frame, corner: .topLeft), CGRect(x: -1_440, y: 884, width: 16, height: 16))

@@ -96,6 +96,37 @@ final class PeekabooMobileUITests: XCTestCase {
         XCTAssertTrue(inProgressSection.waitForExistence(timeout: 3))
     }
 
+    func testSearchFiltersTasksByTitle() throws {
+        addTask(named: "Alpha task")
+        addTask(named: "Beta task")
+
+        let searchField = app.textFields["task-search-field"]
+        XCTAssertFalse(searchField.exists)
+
+        let searchButton = app.buttons["toggle-task-search"]
+        XCTAssertTrue(searchButton.waitForExistence(timeout: 3))
+        searchButton.tap()
+
+        XCTAssertTrue(searchField.waitForExistence(timeout: 3))
+        searchField.typeText("ALPHA")
+        XCTAssertTrue(app.staticTexts["Alpha task"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Beta task"].waitForNonExistence(timeout: 3))
+
+        let clearButton = app.buttons["clear-task-search"]
+        XCTAssertTrue(clearButton.waitForExistence(timeout: 3))
+        clearButton.tap()
+        XCTAssertTrue(app.staticTexts["Beta task"].waitForExistence(timeout: 3))
+
+        searchField.typeText("Missing task")
+        XCTAssertTrue(app.staticTexts["No matches"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Try a different search."].exists)
+
+        searchButton.tap()
+        XCTAssertTrue(searchField.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Alpha task"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Beta task"].exists)
+    }
+
     private func addTask(named title: String, priority: String? = nil) {
         let addButton = app.buttons["add-task-button"]
         XCTAssertTrue(addButton.waitForExistence(timeout: 3))

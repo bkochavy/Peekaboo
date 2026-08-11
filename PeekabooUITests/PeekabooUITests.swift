@@ -87,6 +87,36 @@ final class PeekabooUITests: XCTestCase {
         XCTAssertGreaterThan(second.frame.minY, first.frame.minY)
     }
 
+    func testSearchFiltersTasksByTitle() throws {
+        addTask(named: "Book flights")
+
+        XCTAssertTrue(app.staticTexts["Book flights"].waitForExistence(timeout: 2))
+
+        let searchField = app.textFields["task-search-field"]
+        XCTAssertFalse(searchField.exists)
+
+        let searchButton = app.buttons["toggle-task-search"]
+        XCTAssertTrue(searchButton.waitForExistence(timeout: 2))
+        searchButton.click()
+        XCTAssertTrue(searchField.waitForExistence(timeout: 2))
+        searchField.typeText("FLIGHTS")
+
+        XCTAssertTrue(app.staticTexts["Book flights"].waitForExistence(timeout: 2))
+
+        let clearSearch = app.buttons["clear-task-search"]
+        XCTAssertTrue(clearSearch.waitForExistence(timeout: 2))
+        clearSearch.click()
+        XCTAssertTrue(app.staticTexts["Book flights"].waitForExistence(timeout: 2))
+
+        searchField.typeText("trains")
+        XCTAssertTrue(app.staticTexts["No matches"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.staticTexts["Book flights"].exists)
+
+        searchButton.click()
+        XCTAssertFalse(searchField.exists)
+        XCTAssertTrue(app.staticTexts["Book flights"].waitForExistence(timeout: 2))
+    }
+
     private func addTask(named title: String) {
         let addButton = app.buttons["add-task-button"]
         XCTAssertTrue(addButton.waitForExistence(timeout: 2))
