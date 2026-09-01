@@ -9,6 +9,7 @@ struct TaskRowView: View {
 
     @State private var editTitle = ""
     @State private var isHovering = false
+    @State private var isDropTargeted = false
     @FocusState private var isRenameFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -53,6 +54,16 @@ struct TaskRowView: View {
             Color.primary.opacity(isHovering ? 0.055 : 0),
             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
+        // Says what the drop will do before the mouse is released: a line on
+        // the edge the task will land against, or a filled row when the exact
+        // slot is decided by the section and priority rules instead.
+        .background(
+            Color.accentColor.opacity(dropPlacement == .join ? 0.16 : 0),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .overlay(alignment: .top) { dropEdgeIndicator(for: .above) }
+        .overlay(alignment: .bottom) { dropEdgeIndicator(for: .below) }
+        .opacity(isBeingDragged ? 0.4 : 1)
         .contentShape(Rectangle())
         .onTapGesture(count: 2, perform: handleDoubleClick)
         .help(progressToggleHelp)
@@ -62,9 +73,11 @@ struct TaskRowView: View {
         } preview: {
             dragPreview
         }
-        .onDrop(of: [TaskDragPayload.internalTaskType], isTargeted: nil) { providers, _ in
+        .onDrop(of: [TaskDragPayload.internalTaskType], isTargeted: $isDropTargeted) { providers, _ in
             acceptDrop(from: providers)
         }
+        .animation(reduceMotion ? nil : PeekabooMotion.quick, value: dropPlacement)
+        .animation(reduceMotion ? nil : PeekabooMotion.quick, value: isBeingDragged)
         .onHover { hovering in
             withAnimation(reduceMotion ? nil : PeekabooMotion.quick) {
                 isHovering = hovering
@@ -79,6 +92,24 @@ struct TaskRowView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("task-row-\(task.id.uuidString)")
+    }
+
+    private var isBeingDragged: Bool { uiState.draggedTaskID == task.id }
+
+    /// Only while this row is the drop target, and only for a drag the store
+    /// would actually honour — a rejected drop must not advertise a landing
+    /// spot it will refuse.
+    private var dropPlacement: TaskDropPlacement? {
+        guard isDropTargeted, let draggedTaskID = uiState.draggedTaskID else { return nil }
+        return store.dropPlacement(taskID: draggedTaskID, onto: task.id)
+    }
+
+    @ViewBuilder
+    private func dropEdgeIndicator(for edge: TaskDropPlacement) -> some View {
+        Capsule()
+            .fill(Color.accentColor.opacity(dropPlacement == edge ? 0.65 : 0))
+            .frame(height: 2)
+            .padding(.horizontal, 8)
     }
 
     private var dragPreview: some View {

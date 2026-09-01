@@ -667,6 +667,145 @@ final class TaskStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testPlaceClampsDropsThatCrossPriorityGroups() throws {
+        let clock = MutableNow(Date(timeIntervalSince1970: 1_000))
+        let store = try makeTestStore(now: { clock.value })
+        let high = try XCTUnwrap(store.create(title: "High", priority: .high))
+        clock.value = Date(timeIntervalSince1970: 1_100)
+        let firstPlain = try XCTUnwrap(store.create(title: "First plain"))
+        clock.value = Date(timeIntervalSince1970: 1_200)
+        let secondPlain = try XCTUnwrap(store.create(title: "Second plain"))
+        clock.value = Date(timeIntervalSince1970: 1_300)
+        let thirdPlain = try XCTUnwrap(store.create(title: "Third plain"))
+
+        XCTAssertEqual(
+            store.orderedTasks(for: .todo).map(\.id),
+            [high.id, thirdPlain.id, secondPlain.id, firstPlain.id]
+        )
+
+        // Dragging above a higher-priority row can't outrank it, so the task
+        // lands at the top of its own group instead of snapping back.
+        clock.value = Date(timeIntervalSince1970: 1_400)
+        XCTAssertTrue(store.place(taskID: firstPlain.id, near: high.id))
+        XCTAssertEqual(firstPlain.priority, .none)
+        XCTAssertEqual(
+            store.orderedTasks(for: .todo).map(\.id),
+            [high.id, firstPlain.id, thirdPlain.id, secondPlain.id]
+        )
+
+        // Dragging down past its own group lands at that group's bottom.
+        clock.value = Date(timeIntervalSince1970: 1_500)
+        let secondHigh = try XCTUnwrap(store.create(title: "Second high", priority: .high))
+        XCTAssertEqual(
+            store.orderedTasks(for: .todo).map(\.id),
+            [secondHigh.id, high.id, firstPlain.id, thirdPlain.id, secondPlain.id]
+        )
+        clock.value = Date(timeIntervalSince1970: 1_600)
+        XCTAssertTrue(store.place(taskID: secondHigh.id, near: thirdPlain.id))
+        XCTAssertEqual(secondHigh.priority, .high)
+        XCTAssertEqual(
+            store.orderedTasks(for: .todo).map(\.id),
+            [high.id, secondHigh.id, firstPlain.id, thirdPlain.id, secondPlain.id]
+        )
+
+        // Already at the clamped edge, and cross-section drops, stay rejected.
+        XCTAssertFalse(store.place(taskID: secondHigh.id, near: thirdPlain.id))
+        XCTAssertFalse(store.place(taskID: firstPlain.id, near: high.id))
+        XCTAssertFalse(store.place(taskID: high.id, near: high.id))
+        store.setStatus(.inProgress, for: thirdPlain)
+        XCTAssertFalse(store.place(taskID: firstPlain.id, near: thirdPlain.id))
+    }
+
+    @MainActor
+    func testDropPlacementMatchesWhereTheDropActuallyLands() throws {
+        let clock = MutableNow(Date(timeIntervalSince1970: 1_000))
+        let store = try makeTestStore(now: { clock.value })
+        let bottom = try XCTUnwrap(store.create(title: "Bottom"))
+        clock.value = Date(timeIntervalSince1970: 1_100)
+        let top = try XCTUnwrap(store.create(title: "Top"))
+        clock.value = Date(timeIntervalSince1970: 1_200)
+        let urgent = try XCTUnwrap(store.create(title: "Urgent", priority: .high))
+        clock.value = Date(timeIntervalSince1970: 1_300)
+        let finished = try XCTUnwrap(store.create(title: "Finished", status: .done))
+        XCTAssertEqual(store.orderedTasks(for: .todo).map(\.id), [urgent.id, top.id, bottom.id])
+
+        // Dragging up predicts the edge above the target; the drop confirms it.
+        XCTAssertEqual(store.dropPlacement(taskID: bottom.id, onto: top.id), .above)
+        XCTAssertTrue(store.drop(taskID: bottom.id, onto: top.id))
+        XCTAssertEqual(store.orderedTasks(for: .todo).map(\.id), [urgent.id, bottom.id, top.id])
+
+        // And dragging down predicts the edge below it.
+        clock.value = Date(timeIntervalSince1970: 1_400)
+        XCTAssertEqual(store.dropPlacement(taskID: bottom.id, onto: top.id), .below)
+        XCTAssertTrue(store.drop(taskID: bottom.id, onto: top.id))
+        XCTAssertEqual(store.orderedTasks(for: .todo).map(\.id), [urgent.id, top.id, bottom.id])
+
+        // Crossing a priority group or a section clamps the landing slot, so no
+        // exact edge may be promised.
+        XCTAssertEqual(store.dropPlacement(taskID: top.id, onto: urgent.id), .join)
+        XCTAssertEqual(store.dropPlacement(taskID: top.id, onto: finished.id), .join)
+
+        XCTAssertNil(store.dropPlacement(taskID: top.id, onto: top.id))
+        XCTAssertNil(store.dropPlacement(taskID: UUID(), onto: top.id))
+        XCTAssertNil(store.dropPlacement(taskID: top.id, onto: UUID()))
+    }
+
+    @MainActor
+    func testDropAcrossSectionsPlacesTheTaskAgainstTheTargetRow() throws {
+        let clock = MutableNow(Date(timeIntervalSince1970: 1_000))
+        let store = try makeTestStore(now: { clock.value })
+        let oldest = try XCTUnwrap(store.create(title: "Oldest", status: .inProgress))
+        clock.value = Date(timeIntervalSince1970: 1_100)
+        let middle = try XCTUnwrap(store.create(title: "Middle", status: .inProgress))
+        clock.value = Date(timeIntervalSince1970: 1_200)
+        let newest = try XCTUnwrap(store.create(title: "Newest", status: .inProgress))
+        clock.value = Date(timeIntervalSince1970: 1_300)
+        let incoming = try XCTUnwrap(store.create(title: "Incoming"))
+        XCTAssertEqual(
+            store.orderedTasks(for: .inProgress).map(\.id),
+            [newest.id, middle.id, oldest.id]
+        )
+
+        // The task carries no manual order from To Do, so without placing it
+        // against the target row it would land wherever its timestamp put it.
+        clock.value = Date(timeIntervalSince1970: 1_400)
+        XCTAssertTrue(store.drop(taskID: incoming.id, onto: oldest.id))
+        XCTAssertEqual(incoming.status, .inProgress)
+        XCTAssertEqual(
+            store.orderedTasks(for: .inProgress).map(\.id),
+            [newest.id, middle.id, oldest.id, incoming.id]
+        )
+    }
+
+    @MainActor
+    func testRefreshKeepsPublishedTasksWhenTheStoreIsUnchanged() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = TaskStore(container: container)
+        let task = try XCTUnwrap(store.create(title: "Stable"))
+        let revisionAfterCreate = store.revision
+
+        store.refresh()
+
+        // A local save also posts a store remote change, and rebuilding every
+        // row for an identical fetch is what made drops settle twice.
+        XCTAssertEqual(store.revision, revisionAfterCreate)
+        XCTAssertTrue(store.tasks.first === task)
+
+        // A write the store did not make — the CloudKit import case — must
+        // still replace the published objects.
+        let externalContext = ModelContext(container)
+        for stored in try externalContext.fetch(FetchDescriptor<TaskItem>()) {
+            stored.title = "Imported"
+        }
+        try externalContext.save()
+
+        store.refresh()
+        XCTAssertGreaterThan(store.revision, revisionAfterCreate)
+        XCTAssertEqual(store.tasks.map(\.title), ["Imported"])
+        XCTAssertFalse(store.tasks.first === task)
+    }
+
+    @MainActor
     func testRebalanceUpdatesManualOrderOnEveryPhysicalReplica() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let context = ModelContext(container)

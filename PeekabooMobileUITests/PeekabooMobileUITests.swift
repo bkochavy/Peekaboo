@@ -37,6 +37,11 @@ final class PeekabooMobileUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         }
         XCTAssertGreaterThan(second.frame.minY, first.frame.minY)
+        // Dropping into the last slot of To Do is a reorder. It used to read as
+        // the Done edge zone and completed the task instead, which still moved
+        // the row below its neighbour and passed the check above.
+        XCTAssertEqual(app.staticTexts["task-section-todo"].label, "To do · 2")
+        XCTAssertFalse(app.staticTexts["task-section-done"].exists)
     }
 
     func testDragMovesTaskAcrossSections() throws {

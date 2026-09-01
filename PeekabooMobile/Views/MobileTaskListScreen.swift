@@ -14,6 +14,19 @@ private enum MobileTaskListItem: Identifiable {
     }
 }
 
+/// What a finished drag means once the drop index is mapped back onto the
+/// flat list. Every drag resolves to exactly one of these, so a drop can never
+/// land somewhere the store then refuses to honour.
+private enum MobileTaskDropIntent {
+    case status(TaskStatus)
+    case row(UUID)
+}
+
+private struct MobileDropFeedback: Equatable {
+    var count = 0
+    var moved = true
+}
+
 struct MobileTaskListScreen: View {
     @ObservedObject var store: TaskStore
     let iCloudAvailability: ICloudAvailability
@@ -23,6 +36,7 @@ struct MobileTaskListScreen: View {
     @State private var editor: MobileTaskEditorConfiguration?
     @State private var searchQuery = ""
     @State private var isSearchPresented = false
+    @State private var dropFeedback = MobileDropFeedback()
     @FocusState private var isSearchFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -45,9 +59,17 @@ struct MobileTaskListScreen: View {
             footer
         }
         .background(Color(uiColor: .systemBackground))
-        .animation(reduceMotion ? nil : PeekabooMotion.spring, value: store.tasks.map(\.id))
+        // Key the list animation to the order the user can actually see. The
+        // raw store array is in fetch order, so it reshuffles on every reload
+        // and used to animate the whole screen for changes nothing on screen
+        // reflects.
+        .animation(
+            reduceMotion ? nil : PeekabooMotion.spring,
+            value: sections.flatMap { $0.tasks.map(\.id) }
+        )
         .animation(reduceMotion ? nil : PeekabooMotion.quick, value: selectedScope)
         .animation(reduceMotion ? nil : PeekabooMotion.quick, value: isSearchPresented)
+        .animation(reduceMotion ? nil : PeekabooMotion.quick, value: isSearchFocused)
         .sheet(item: $editor) { configuration in
             MobileTaskEditor(store: store, configuration: configuration)
         }
@@ -235,12 +257,21 @@ struct MobileTaskListScreen: View {
         }
         .listStyle(.plain)
         .environment(\.defaultMinListRowHeight, 1)
+        // A drop that lands somewhere the ordering rules can't represent has to
+        // snap back. Say so with a tap instead of letting it read as a glitch.
+        .sensoryFeedback(trigger: dropFeedback) { _, feedback in
+            feedback.moved ? .impact(weight: .light) : .impact(flexibility: .rigid)
+        }
         .scrollIndicators(.never)
+        .scrollDismissesKeyboard(.immediately)
         .refreshable { await refresh() }
-        .contentMargins(.bottom, 76, for: .scrollContent)
+        .contentMargins(.bottom, isSearchFocused ? 12 : 76, for: .scrollContent)
         .overlay(alignment: .bottom) {
-            addTaskButton
-                .padding(.bottom, 8)
+            if !isSearchFocused {
+                addTaskButton
+                    .padding(.bottom, 8)
+                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
+            }
         }
     }
 
@@ -257,6 +288,10 @@ struct MobileTaskListScreen: View {
         return items
     }
 
+    /// Headers and edge strips stay movable on purpose. `moveDisabled` also
+    /// makes a row undroppable, and List then clamps every proposed drop index
+    /// away from it, which puts both out of reach of a drag. Lifting one
+    /// instead does nothing: `move` ignores drags that don't start on a task.
     private func sectionHeader(status: TaskStatus, count: Int) -> some View {
         Text("\(status.title) · \(count)")
             .font(.caption)
@@ -271,9 +306,12 @@ struct MobileTaskListScreen: View {
             .accessibilityIdentifier("task-section-\(status.rawValue)")
     }
 
+    /// Invisible strip past the first and last row. It is the only way to reach
+    /// In Progress or Done by drag when those sections are empty, so it needs
+    /// to be tall enough to hit with a finger.
     private func edgeDropTarget(status: TaskStatus) -> some View {
         Color.clear
-            .frame(maxWidth: .infinity, minHeight: 6)
+            .frame(maxWidth: .infinity, minHeight: 22)
             .contentShape(Rectangle())
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
@@ -291,39 +329,86 @@ struct MobileTaskListScreen: View {
         guard let sourceIndex = source.first,
               source.count == 1,
               items.indices.contains(sourceIndex),
-              case let .task(movedTask) = items[sourceIndex] else { return }
-
-        if let status = edgeStatus(in: items, destination: destination) {
-            withAnimation(reduceMotion ? nil : PeekabooMotion.spring) {
-                _ = store.drop(taskID: movedTask.id, into: status)
-            }
-            return
-        }
-
-        guard sourceIndex != destination,
+              case let .task(movedTask) = items[sourceIndex],
+              sourceIndex != destination,
               sourceIndex + 1 != destination else { return }
 
-        let targetIndex = destination > sourceIndex ? destination - 1 : destination
-        guard items.indices.contains(targetIndex), targetIndex != sourceIndex else { return }
+        guard let intent = dropIntent(
+            in: items,
+            movedTask: movedTask,
+            sourceIndex: sourceIndex,
+            destination: destination
+        ) else { return }
 
+        var moved = false
         withAnimation(reduceMotion ? nil : PeekabooMotion.spring) {
-            switch items[targetIndex] {
-            case let .edge(status), let .header(status, _):
-                _ = store.drop(taskID: movedTask.id, into: status)
-            case let .task(targetTask):
-                _ = store.drop(taskID: movedTask.id, onto: targetTask.id)
+            switch intent {
+            case let .status(status):
+                moved = store.drop(taskID: movedTask.id, into: status)
+            case let .row(targetID):
+                moved = store.drop(taskID: movedTask.id, onto: targetID)
             }
+        }
+        dropFeedback = MobileDropFeedback(count: dropFeedback.count + 1, moved: moved)
+    }
+
+    /// `destination` is an insertion index into the pre-move array, so the row
+    /// the drop displaces sits one slot earlier when the task travelled down.
+    /// Landing on a header or edge zone of the task's own section means "put me
+    /// at that end of this section", not "change my status" — the old index
+    /// arithmetic read the last slot of the list as the Done edge, which turned
+    /// an ordinary drag to the bottom of To Do into a completed task.
+    private func dropIntent(
+        in items: [MobileTaskListItem],
+        movedTask: TaskItem,
+        sourceIndex: Int,
+        destination: Int
+    ) -> MobileTaskDropIntent? {
+        // The top strip is a row of its own, so a drop on it resolves to the
+        // slot above or below it. Both belong to the strip: the section header
+        // sits between it and the first task, so neither slot can mean a
+        // reorder. The bottom strip has no such header, so only the slot below
+        // it is the strip — the one above is the last row of the last section.
+        if case let .edge(status) = items.first, destination <= 1 {
+            return edgeIntent(status: status, in: items, movedTask: movedTask, fromTop: true)
+        }
+        if case let .edge(status) = items.last, destination >= items.count {
+            return edgeIntent(status: status, in: items, movedTask: movedTask, fromTop: false)
+        }
+
+        let targetIndex = destination > sourceIndex ? destination - 1 : destination
+        guard items.indices.contains(targetIndex), targetIndex != sourceIndex else { return nil }
+
+        switch items[targetIndex] {
+        case let .task(targetTask):
+            return .row(targetTask.id)
+        case let .edge(status), let .header(status, _):
+            return edgeIntent(
+                status: status,
+                in: items,
+                movedTask: movedTask,
+                fromTop: targetIndex < sourceIndex
+            )
         }
     }
 
-    private func edgeStatus(
+    /// A drop on a header or edge strip of the task's own section means "put me
+    /// at that end of this section", not "change my status" — resolve it to the
+    /// row already sitting there so the placement rules stay in one place.
+    private func edgeIntent(
+        status: TaskStatus,
         in items: [MobileTaskListItem],
-        destination: Int
-    ) -> TaskStatus? {
-        guard selectedScope == .tasks else { return nil }
-        if destination <= 1 { return .inProgress }
-        if destination >= items.count - 1 { return .done }
-        return nil
+        movedTask: TaskItem,
+        fromTop: Bool
+    ) -> MobileTaskDropIntent? {
+        guard status == movedTask.status else { return .status(status) }
+        let sectionTasks = items.compactMap { item -> TaskItem? in
+            guard case let .task(task) = item, task.status == status else { return nil }
+            return task
+        }
+        guard let anchor = fromTop ? sectionTasks.first : sectionTasks.last,
+              anchor.id != movedTask.id else { return nil }
+        return .row(anchor.id)
     }
 
     private var addTaskButton: some View {

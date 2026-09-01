@@ -16,6 +16,15 @@ struct TaskScopeSnapshot {
     let activeCount: Int
 }
 
+/// How a drop onto a row resolves, so a drag indicator can promise exactly
+/// what will happen: a precise insertion edge, or joining the target's
+/// neighbourhood when priority or section rules decide the final slot.
+enum TaskDropPlacement: Equatable {
+    case above
+    case below
+    case join
+}
+
 enum CloudSyncActivityKind: Equatable {
     case setup
     case importData
@@ -469,14 +478,35 @@ final class TaskStore: ObservableObject {
         }
 
         if task.status == target.status {
-            return reorder(taskID: taskID, relativeTo: targetID)
+            return place(taskID: taskID, near: targetID)
         }
 
         guard setStatus(target.status, for: task) else { return false }
-        if task.priority == target.priority {
-            reorder(taskID: taskID, relativeTo: targetID)
-        }
+        // The task keeps the manual order it had in its old section, which puts
+        // it somewhere arbitrary in the new one. Place it against the row it was
+        // dropped on, clamped to its own priority group like any other drop.
+        place(taskID: taskID, near: targetID)
         return true
+    }
+
+    /// Where a drop on `targetID` would land, for drag indicators. Mirrors
+    /// `drop(taskID:onto:)`: an exact insertion edge only when both rows sit in
+    /// the same section and priority group, because otherwise the placement
+    /// rules clamp the task to its own group and it cannot reach that edge.
+    func dropPlacement(taskID: UUID, onto targetID: UUID) -> TaskDropPlacement? {
+        guard taskID != targetID,
+              let task = tasks.first(where: { $0.id == taskID }),
+              let target = tasks.first(where: { $0.id == targetID }) else {
+            return nil
+        }
+        guard task.status == target.status, task.priority == target.priority else { return .join }
+
+        let group = orderedTasks(for: task.status).filter { $0.priority == task.priority }
+        guard let sourceIndex = group.firstIndex(where: { $0.id == taskID }),
+              let targetIndex = group.firstIndex(where: { $0.id == targetID }) else {
+            return .join
+        }
+        return targetIndex < sourceIndex ? .above : .below
     }
 
     /// Drop onto a section's own area (header, gaps, empty placeholder).
@@ -487,6 +517,36 @@ final class TaskStore: ObservableObject {
             return false
         }
         return setStatus(status, for: task)
+    }
+
+    /// Drag placement inside one section. `reorder` only accepts a target from
+    /// the same priority group, but a drag can cross those invisible group
+    /// boundaries. Priority outranks manual order, so instead of rejecting the
+    /// drop — which leaves the dragged row snapping back to where it started —
+    /// move the task as far as its own priority group allows.
+    @discardableResult
+    func place(taskID: UUID, near targetID: UUID) -> Bool {
+        guard taskID != targetID,
+              let task = tasks.first(where: { $0.id == taskID }),
+              let target = tasks.first(where: { $0.id == targetID }),
+              task.status == target.status else {
+            return false
+        }
+        if task.priority == target.priority {
+            return reorder(taskID: taskID, relativeTo: targetID)
+        }
+
+        let section = orderedTasks(for: task.status)
+        guard let sourceIndex = section.firstIndex(where: { $0.id == taskID }),
+              let targetIndex = section.firstIndex(where: { $0.id == targetID }) else {
+            return false
+        }
+        let group = section.filter { $0.priority == task.priority }
+        guard let anchor = targetIndex < sourceIndex ? group.first : group.last,
+              anchor.id != taskID else {
+            return false
+        }
+        return reorder(taskID: taskID, relativeTo: anchor.id)
     }
 
     @discardableResult
@@ -570,9 +630,28 @@ final class TaskStore: ObservableObject {
         // back to CloudKit by the next local save.
         let refreshedContext = ModelContext(container)
         let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
+        let visible = visibleUniqueTasks(from: fetched)
+        // CloudKit's own export bookkeeping posts a store remote change after
+        // every local save, so most refreshes read back exactly what is already
+        // on screen. Republishing identical rows would swap every model
+        // instance and rebuild the list while a drag or swipe animation is
+        // still running, which reads as a second settle. Adopt the refreshed
+        // context only when the store genuinely differs; when it matches, the
+        // published objects hold the same values the store just returned and
+        // cannot be stale.
+        guard !matchesPublishedTasks(visible) else { return }
         context = refreshedContext
-        tasks = visibleUniqueTasks(from: fetched)
+        tasks = visible
         revision &+= 1
+    }
+
+    private func matchesPublishedTasks(_ fetched: [TaskItem]) -> Bool {
+        guard fetched.count == tasks.count else { return false }
+        let published = Dictionary(
+            tasks.map { ($0.id, TaskReplicaSnapshot($0)) },
+            uniquingKeysWith: { current, _ in current }
+        )
+        return fetched.allSatisfy { published[$0.id] == TaskReplicaSnapshot($0) }
     }
 
     /// CloudKit can't enforce a unique UUID attribute. If a malformed import

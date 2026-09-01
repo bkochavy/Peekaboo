@@ -11,6 +11,7 @@ struct MobileTaskRow: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var markScale: CGFloat = 1
+    @State private var actionFeedback = 0
 
     var body: some View {
         HStack(spacing: 12) {
@@ -60,6 +61,7 @@ struct MobileTaskRow: View {
         }
         .accessibilityIdentifier("task-row-\(task.id.uuidString)")
         .accessibilityAction(named: "Edit", edit)
+        .sensoryFeedback(.impact(weight: .light), trigger: actionFeedback)
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
             Button {
                 animated { store.performPrimaryAction(task) }
@@ -103,6 +105,7 @@ struct MobileTaskRow: View {
     // List only animates row moves between sections when the data mutation
     // itself happens inside withAnimation, so every store call goes through here.
     private func animated(_ change: @escaping () -> Void) {
+        actionFeedback &+= 1
         withAnimation(reduceMotion ? nil : PeekabooMotion.spring, change)
     }
 }

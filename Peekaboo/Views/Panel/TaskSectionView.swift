@@ -36,14 +36,26 @@ struct TaskSectionView: View {
             }
         }
         .background(
-            Color.accentColor.opacity(isDropTargeted ? 0.08 : 0),
+            Color.accentColor.opacity(isAcceptingDrop ? 0.08 : 0),
             in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
         .onDrop(of: [TaskDragPayload.internalTaskType], isTargeted: $isDropTargeted) { providers, _ in
             acceptSectionDrop(from: providers)
         }
-        .animation(reduceMotion ? nil : PeekabooMotion.quick, value: isDropTargeted)
+        .animation(reduceMotion ? nil : PeekabooMotion.quick, value: isAcceptingDrop)
         .animation(reduceMotion ? nil : PeekabooMotion.spring, value: tasks.map(\.id))
+    }
+
+    /// A section-level drop only changes the task's status, so dragging inside
+    /// the section it already belongs to does nothing. Lighting it up anyway
+    /// promised a move that never happened.
+    private var isAcceptingDrop: Bool {
+        guard isDropTargeted,
+              let draggedTaskID = uiState.draggedTaskID,
+              let dragged = store.tasks.first(where: { $0.id == draggedTaskID }) else {
+            return false
+        }
+        return dragged.status != status
     }
 
     private func acceptSectionDrop(from providers: [NSItemProvider]) -> Bool {
