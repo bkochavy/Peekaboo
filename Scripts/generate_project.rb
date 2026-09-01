@@ -127,7 +127,7 @@ app.build_configurations.each do |config|
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
   settings['SWIFT_EMIT_LOC_STRINGS'] = 'YES'
   settings['MARKETING_VERSION'] = '1.1'
-  settings['CURRENT_PROJECT_VERSION'] = '12'
+  settings['CURRENT_PROJECT_VERSION'] = '13'
   settings['ICLOUD_CONTAINER_ENVIRONMENT'] = config.name == 'Release' ? 'Production' : 'Development'
   settings['APS_ENVIRONMENT'] = config.name == 'Release' ? 'production' : 'development'
   abort "Mismatched Peekaboo CloudKit/APNs environment for #{config.name}" unless
@@ -179,7 +179,7 @@ mobile_app.build_configurations.each do |config|
   settings['TARGETED_DEVICE_FAMILY'] = '1'
   settings['SUPPORTS_MACCATALYST'] = 'NO'
   settings['MARKETING_VERSION'] = '1.0'
-  settings['CURRENT_PROJECT_VERSION'] = '12'
+  settings['CURRENT_PROJECT_VERSION'] = '13'
   settings['ICLOUD_CONTAINER_ENVIRONMENT'] = config.name == 'Release' ? 'Production' : 'Development'
   settings['APS_ENVIRONMENT'] = config.name == 'Release' ? 'production' : 'development'
   abort "Mismatched PeekabooMobile CloudKit/APNs environment for #{config.name}" unless
