@@ -23,21 +23,32 @@ sync-related change unless every invariant and release check below remains true.
   development-signed archive as a substitute for the TestFlight Mac build when
   validating production sync.
 
-### Mandatory standard capabilities
+### Mandatory macOS entitlements — do not remove
 
+Every macOS configuration (`Peekaboo.entitlements`,
+`PeekabooDebug.entitlements`, and `PeekabooLocal.entitlements`) MUST retain both
+values under `com.apple.security.temporary-exception.mach-lookup.global-name`:
+
+```text
+com.apple.cloudd
+com.apple.duetactivityscheduler
+```
+
+- `com.apple.cloudd` is required for the sandboxed app to reach CloudKit.
+- `com.apple.duetactivityscheduler` is required for
+  `NSPersistentCloudKitContainer` to schedule exports in the sandboxed
+  TestFlight/Mac App Store build.
+- These are NOT harmless log-suppression exceptions. Do not remove either one
+  during cleanup, security review, entitlement minimization, or release prep.
 - The Mac app MUST keep network client/server, CloudKit container, iCloud
   service, production/development APNs, and App Sandbox entitlements intact.
-- macOS configurations MUST NOT contain temporary Mach lookup exceptions for
-  `com.apple.cloudd` or `com.apple.duetactivityscheduler`. CloudKit must use the
-  standard capabilities and entitlements generated for the app's provisioning
-  profile.
+- App Store Connect MUST contain temporary-entitlement usage information for
+  both Mach services and the corresponding Feedback Assistant ID.
 
-Decision record: On September 2, 2026, the temporary Mach lookup exceptions
-were removed to align Peekaboo with Apple's documented CloudKit configuration.
-Build 8 had previously stopped exporting after one of these exceptions was
-removed, but that correlation did not establish the exception as a supported
-CloudKit requirement. A replacement build must pass the complete real-device
-two-way sync verification below before release.
+Incident record: Mac build 8 removed `com.apple.duetactivityscheduler`. The app
+continued saving tasks locally and CloudKit setup appeared successful, but no
+new export was scheduled after a local save. Mac-to-iPhone sync stopped. Build 9
+restored the entitlement. Never repeat this change.
 
 ### Persistence and observation invariants
 
@@ -78,8 +89,8 @@ Treat these as real failures until disproved:
 
 - `BGSystemTaskSchedulerErrorDomain Code=3`, `updateTaskRequest failed`, or
   repeated `com.apple.coredata.cloudkit.activity.export...` scheduling errors.
-  First verify the installed build's standard CloudKit capability, Production
-  APNs environment, active store, and subsequent export events.
+  First verify the `com.apple.duetactivityscheduler` entitlement in the
+  INSTALLED TestFlight app, not only in the source plist or development archive.
 - Phone-to-phone sync works but Mac does not: inspect the installed Mac build,
   Production entitlements, active store path, CloudKit event timestamps, and
   fresh-context import refresh.
@@ -106,8 +117,8 @@ Build success and unit tests are insufficient. Complete all of the following:
 1. Regenerate `Peekaboo.xcodeproj` from `Scripts/generate_project.rb` and run
    `Scripts/verify_project_generation.rb`.
 2. Inspect the archived AND installed app entitlements with `codesign`. Confirm
-   Production CloudKit/APNs and the absence of temporary Mach lookup exceptions
-   in the TestFlight Mac app.
+   Production CloudKit/APNs and both Mach lookup services in the TestFlight Mac
+   app.
 3. Confirm only the intended Peekaboo build is running and record its bundle
    version. Do not accidentally test DerivedData or an old `/Applications` copy.
 4. Use real TestFlight builds on a real Mac and real iPhone signed into the same
@@ -140,9 +151,8 @@ one-way failure before making the next change.
   assigned to the intended internal TestFlight group.
 - Install the distributed TestFlight Mac build before validating sync. An
   archive signed for development can have different APNs behavior.
-- Never “fix” CloudKit scheduler errors by suppressing logs or adding temporary
-  Mach lookup exceptions. Diagnose standard capabilities, signing, the active
-  store, and CloudKit events, then prove an export after a local save.
+- Never “fix” CloudKit scheduler errors by suppressing logs or removing sandbox
+  exceptions. Prove an export after a local save instead.
 
 Keep this entire Live Sync Contract synchronized verbatim between the root
 `AGENTS.md` and `claude.md`. Any deliberate change to these invariants requires
