@@ -55,26 +55,6 @@ The Mac app makes a one-time `default.store.pre-cloudkit*` backup before first a
 
 CloudKit pushes are unreliable in Simulator, so the app also refreshes whenever it becomes active and supports pull-to-refresh on iPhone. Final sync validation still requires two real, unlocked devices on the same iCloud account. A directly distributed Mac build needs a Developer ID provisioning profile that contains the iCloud entitlement; ad-hoc signing cannot access the CloudKit container.
 
-### Mac App Store sandbox note
-
-The Release target retains narrowly scoped temporary sandbox exceptions for
-`com.apple.cloudd` and `com.apple.duetactivityscheduler`. They are required for
-`NSPersistentCloudKitContainer` imports and scheduled exports in the sandboxed
-Mac build.
-
-Before App Store submission, add the following under **App Sandbox Entitlement
-Usage Information** in App Store Connect:
-
-- Entitlement: `com.apple.security.temporary-exception.mach-lookup.global-name`
-- Values: `com.apple.cloudd`, `com.apple.duetactivityscheduler`
-- Usage: “Allows Peekaboo's sandboxed macOS app to access the system CloudKit
-  daemon and background activity scheduler used by
-  `NSPersistentCloudKitContainer`, so private task changes can be imported from
-  and exported to the user's iCloud account. Reviewers can assess it by editing
-  a task on the iPhone companion and confirming that the change appears in the
-  Mac app, then editing it on Mac and confirming the reverse sync.”
-- Include the Feedback Assistant ID associated with the macOS sandbox issue.
-
 ## Interactions
 
 - Double-click a To do task to move it to In Progress.
