@@ -21,32 +21,31 @@ sync-related change unless every invariant and release check below remains true.
   development-signed archive as a substitute for the TestFlight Mac build when
   validating production sync.
 
-### Mandatory macOS entitlements — do not remove
+### Mandatory macOS entitlements
 
 Every macOS configuration (`Peekaboo.entitlements`,
-`PeekabooDebug.entitlements`, and `PeekabooLocal.entitlements`) MUST retain both
-values under `com.apple.security.temporary-exception.mach-lookup.global-name`:
+`PeekabooDebug.entitlements`, and `PeekabooLocal.entitlements`) MUST NOT contain
+`com.apple.security.temporary-exception.mach-lookup.global-name`, including the
+values `com.apple.cloudd` and `com.apple.duetactivityscheduler`.
 
-```text
-com.apple.cloudd
-com.apple.duetactivityscheduler
-```
-
-- `com.apple.cloudd` is required for the sandboxed app to reach CloudKit.
-- `com.apple.duetactivityscheduler` is required for
-  `NSPersistentCloudKitContainer` to schedule exports in the sandboxed
-  TestFlight/Mac App Store build.
-- These are NOT harmless log-suppression exceptions. Do not remove either one
-  during cleanup, security review, entitlement minimization, or release prep.
+- Apple rejected Mac build 15 under guideline 2.4.5(i) and explicitly stated
+  that these temporary exceptions are not appropriate and will not be granted.
+- Do not reintroduce either temporary exception during sync debugging, cleanup,
+  security review, or release prep.
 - The Mac app MUST keep network client/server, CloudKit container, iCloud
   service, production/development APNs, and App Sandbox entitlements intact.
-- App Store Connect MUST contain temporary-entitlement usage information for
-  both Mach services and the corresponding Feedback Assistant ID.
+- CloudKit sync must work through Apple's standard iCloud capabilities without
+  direct temporary access to internal Mach services.
+- The Mac target MUST link `CloudKit.framework` explicitly. SwiftData and Core
+  Data access CloudKit dynamically, which can leave the framework absent from a
+  standalone Release binary and prevent App Sandbox from granting standard
+  CloudKit service access.
 
-Incident record: Mac build 8 removed `com.apple.duetactivityscheduler`. The app
-continued saving tasks locally and CloudKit setup appeared successful, but no
-new export was scheduled after a local save. Mac-to-iPhone sync stopped. Build 9
-restored the entitlement. Never repeat this change.
+Incident record: Mac build 8 exposed a sync scheduling failure when
+`com.apple.duetactivityscheduler` was absent. Build 15 restored both temporary
+exceptions, but App Review refused them. Any recurrence must now be fixed using
+supported APIs and verified with a real TestFlight two-way sync; the temporary
+exceptions must not be restored.
 
 ### Persistence and observation invariants
 
@@ -87,8 +86,10 @@ Treat these as real failures until disproved:
 
 - `BGSystemTaskSchedulerErrorDomain Code=3`, `updateTaskRequest failed`, or
   repeated `com.apple.coredata.cloudkit.activity.export...` scheduling errors.
-  First verify the `com.apple.duetactivityscheduler` entitlement in the
-  INSTALLED TestFlight app, not only in the source plist or development archive.
+  Verify that the Release executable links `CloudKit.framework`, then verify the
+  standard iCloud entitlements, installed TestFlight build, active store, and
+  CloudKit startup/export events. Do not add temporary Mach lookup exceptions
+  as a workaround.
 - Phone-to-phone sync works but Mac does not: inspect the installed Mac build,
   Production entitlements, active store path, CloudKit event timestamps, and
   fresh-context import refresh.
@@ -115,21 +116,23 @@ Build success and unit tests are insufficient. Complete all of the following:
 1. Regenerate `Peekaboo.xcodeproj` from `Scripts/generate_project.rb` and run
    `Scripts/verify_project_generation.rb`.
 2. Inspect the archived AND installed app entitlements with `codesign`. Confirm
-   Production CloudKit/APNs and both Mach lookup services in the TestFlight Mac
-   app.
-3. Confirm only the intended Peekaboo build is running and record its bundle
+   Production CloudKit/APNs and confirm that no temporary Mach lookup exception
+   is present in the TestFlight Mac app.
+3. Inspect the archived AND installed executable with `otool -L` and confirm
+   that `CloudKit.framework` is linked.
+4. Confirm only the intended Peekaboo build is running and record its bundle
    version. Do not accidentally test DerivedData or an old `/Applications` copy.
-4. Use real TestFlight builds on a real Mac and real iPhone signed into the same
+5. Use real TestFlight builds on a real Mac and real iPhone signed into the same
    iCloud account. Simulator or development-only success does not prove
    Production live sync.
-5. Mac → iPhone: create or edit a uniquely named task on Mac. Verify that a new
+6. Mac → iPhone: create or edit a uniquely named task on Mac. Verify that a new
    CloudKit export event occurs after the mutation and that the change appears
    on iPhone without restarting either app.
-6. iPhone → Mac: edit that task on iPhone. Verify a new import event and that the
+7. iPhone → Mac: edit that task on iPhone. Verify a new import event and that the
    visible Mac panel updates without restarting or repeatedly clicking refresh.
-7. Repeat with priority and status changes, including Done and restore, because
+8. Repeat with priority and status changes, including Done and restore, because
    field updates previously exposed stale-context behavior.
-8. Delete the diagnostic task only after both directions pass, and verify that
+9. Delete the diagnostic task only after both directions pass, and verify that
    the deletion also synchronizes.
 
 If any step fails, the release is blocked. Do not call sync fixed, do not upload

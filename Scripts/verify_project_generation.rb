@@ -6,6 +6,7 @@ require 'json'
 require 'open3'
 require 'rbconfig'
 require 'tmpdir'
+require 'xcodeproj'
 
 ROOT = File.expand_path('..', __dir__)
 GENERATOR = File.join(__dir__, 'generate_project.rb')
@@ -15,10 +16,6 @@ MAC_ENTITLEMENT_PATHS = %w[
   Peekaboo/PeekabooLocal.entitlements
 ].freeze
 MACH_LOOKUP_KEY = 'com.apple.security.temporary-exception.mach-lookup.global-name'
-REQUIRED_MACH_SERVICES = %w[
-  com.apple.cloudd
-  com.apple.duetactivityscheduler
-].freeze
 
 def generate(destination)
   success = system(
@@ -49,12 +46,22 @@ def read_plist(relative_path)
   JSON.parse(output)
 end
 
-def verify_mac_sync_entitlements
+def verify_no_temporary_mach_lookup_entitlements
   MAC_ENTITLEMENT_PATHS.each do |path|
-    services = read_plist(path).fetch(MACH_LOOKUP_KEY, [])
-    missing_services = REQUIRED_MACH_SERVICES - services
-    abort "#{path} is missing #{missing_services.join(', ')}" unless missing_services.empty?
+    entitlements = read_plist(path)
+    abort "#{path} must not contain #{MACH_LOOKUP_KEY}" if entitlements.key?(MACH_LOOKUP_KEY)
   end
+end
+
+def verify_mac_cloudkit_framework(project_path)
+  project = Xcodeproj::Project.open(project_path)
+  target = project.targets.find { |candidate| candidate.name == 'Peekaboo' }
+  abort 'Generated project is missing the Peekaboo target' unless target
+
+  frameworks = target.frameworks_build_phase.files_references.map do |reference|
+    File.basename(reference.path.to_s)
+  end
+  abort 'Peekaboo target must link CloudKit.framework' unless frameworks.include?('CloudKit.framework')
 end
 
 Dir.mktmpdir('peekaboo-project-check') do |directory|
@@ -63,8 +70,10 @@ Dir.mktmpdir('peekaboo-project-check') do |directory|
   first_digest = digest(project_path)
   generate(project_path)
   abort 'Project generation is not repeatable' unless digest(project_path) == first_digest
+  verify_mac_cloudkit_framework(project_path)
 end
 
-verify_mac_sync_entitlements
+verify_no_temporary_mach_lookup_entitlements
 puts 'Project generation is repeatable'
-puts 'Mac sync entitlements are present'
+puts 'Mac target links CloudKit.framework'
+puts 'Mac temporary Mach lookup entitlements are absent'
