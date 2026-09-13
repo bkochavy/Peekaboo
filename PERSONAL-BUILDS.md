@@ -63,3 +63,20 @@ both build commands with new build numbers. On another clone, check `git remote
 
 Automatic uploads and Mac installation are not enabled yet. They require the
 initial Apple setup, production sync acceptance and the reachable destination.
+
+## Setup status (September 12, 2026)
+
+- Both upstream and personal-identity Mac/iPhone builds compile with Xcode 26.3.
+- Project generation is deterministic, CloudKit linkage is checked, and the
+  forbidden temporary Mach lookup entitlement is absent.
+- Apple registered the universal bundle ID `com.kochavy.peekaboo` as
+  `J8T2TZBCCD`, with CloudKit and push notification capabilities enabled.
+- The server has working API-file authentication and an existing CI distribution
+  identity. Source the ignored `.env.personal` for the server's credential paths.
+  Credentials themselves remain outside this repository.
+- Still required: create and associate `iCloud.com.kochavy.peekaboo`, initialize
+  and deploy its Production schema, create the iOS/macOS App Store Connect app
+  record and platform provisioning profiles, archive/export/upload, assign the
+  processed builds to TestFlight, install, and verify real-device two-way sync.
+- No signed distribution, TestFlight invitation, remote installation, or live
+  synchronization has been completed or verified.
