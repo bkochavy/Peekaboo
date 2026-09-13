@@ -35,8 +35,8 @@ Set `ASC_BYPASS_KEYCHAIN=1` for `asc` commands to use API credentials from the
 environment. Never commit API keys, certificates, passwords or private keys.
 
 ```sh
-python3 Scripts/personal-build.py mac --build 2 --archive --export
-python3 Scripts/personal-build.py ios --build 2 --archive --export
+python3 Scripts/personal-build.py mac --build 2 --archive --export --profile 'Peekaboo Mac App Store'
+python3 Scripts/personal-build.py ios --build 2 --archive --export --profile 'Peekaboo iOS App Store'
 ```
 
 These commands require the app's iCloud container and provisioning profiles to

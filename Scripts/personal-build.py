@@ -17,9 +17,12 @@ def main():
     parser.add_argument("--build", required=True, type=int)
     parser.add_argument("--archive", action="store_true", help="Create a signed Release archive")
     parser.add_argument("--export", action="store_true", help="Export archive for App Store Connect")
+    parser.add_argument("--profile", help="Installed App Store provisioning profile name for this platform")
     args = parser.parse_args()
     if args.build < 1 or (args.export and not args.archive):
         parser.error("Use a positive build number; --export requires --archive")
+    if args.archive and not args.profile:
+        parser.error("Signed archives require --profile with this platform's App Store profile")
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     config = json.loads(subprocess.check_output(
         ["git", "show", f"{revision}:PersonalBuild.json"], cwd=ROOT, text=True))
@@ -59,7 +62,8 @@ def main():
                 "-authenticationKeyID", os.environ["ASC_KEY_ID"],
                 "-authenticationKeyIssuerID", os.environ["ASC_ISSUER_ID"]]
         command += ["archive", "-archivePath", str(output / f"{scheme}.xcarchive"),
-                    "CODE_SIGN_IDENTITY=Apple Distribution"] + auth
+                    "CODE_SIGN_STYLE=Manual", "CODE_SIGN_IDENTITY=Apple Distribution",
+                    f"PROVISIONING_PROFILE_SPECIFIER={args.profile}"] + auth
         if os.environ.get("PEEKABOO_SIGNING_KEYCHAIN"):
             command += [f"OTHER_CODE_SIGN_FLAGS=--keychain {os.environ['PEEKABOO_SIGNING_KEYCHAIN']}"]
     else:
