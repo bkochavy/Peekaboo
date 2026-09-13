@@ -2,3 +2,6 @@
 DerivedData/
 *.xcuserstate
 xcuserdata/
+PersonalBuilds/
+.asc/
+.env.personal
